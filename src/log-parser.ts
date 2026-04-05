@@ -96,7 +96,7 @@ function parseLogFile(logPath: string): GameData {
   let inventory: InventoryData | null = null;
   let decks: DeckData[] = [];
   let collection: CollectionEntry[] = [];
-  let dataSource: "complete" | "inferred_from_decks" = "inferred_from_decks";
+  let dataSource: "complete" | "inferred_from_decks" | "untapped" = "inferred_from_decks";
 
   if (startHookPayload) {
     inventory = parseInventory(startHookPayload.InventoryInfo);
@@ -105,8 +105,15 @@ function parseLogFile(logPath: string): GameData {
       startHookPayload.DeckSummariesV2
     );
 
-    // Collection: prefer GetPlayerCardsV3 if available, otherwise infer from decks
-    if (collectionPayload) {
+    // Collection priority:
+    // 1. Untapped.gg cache (most accurate — real collection data)
+    // 2. GetPlayerCardsV3 from log (complete but rarely fires)
+    // 3. Infer from decks (incomplete fallback)
+    const untappedCollection = loadUntappedCollection();
+    if (untappedCollection) {
+      collection = untappedCollection;
+      dataSource = "untapped";
+    } else if (collectionPayload) {
       collection = Object.entries(collectionPayload).map(([id, qty]) => ({
         cardId: Number(id),
         quantity: qty as number,
@@ -330,6 +337,45 @@ function parseRank(raw: Record<string, unknown>): RankData {
       matchesLost: asNumber(raw.limitedMatchesLost),
     },
   };
+}
+
+// ── Untapped.gg collection loader ───────────────────────────────────
+
+const UNTAPPED_COLLECTION_PATH = join(
+  homedir(),
+  ".cache/mtga-mcp/untapped-collection.json"
+);
+
+function loadUntappedCollection(): CollectionEntry[] | null {
+  if (!existsSync(UNTAPPED_COLLECTION_PATH)) return null;
+
+  try {
+    const raw = readFileSync(UNTAPPED_COLLECTION_PATH, "utf-8");
+    const parsed = JSON.parse(raw);
+
+    if (!Array.isArray(parsed.cards)) {
+      console.error("Untapped collection: invalid format (missing cards array)");
+      return null;
+    }
+
+    const collection: CollectionEntry[] = parsed.cards.map(
+      (entry: { grpid: number; quantity: number }) => ({
+        cardId: entry.grpid,
+        quantity: entry.quantity,
+      })
+    );
+
+    console.error(
+      `Loaded Untapped.gg collection: ${collection.length} cards`
+    );
+    return collection;
+  } catch (err) {
+    console.error(
+      "Failed to load Untapped collection:",
+      (err as Error).message
+    );
+    return null;
+  }
 }
 
 // ── Collection inference from decks ──────────────────────────────────

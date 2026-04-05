@@ -81,7 +81,7 @@ export interface GameData {
     logFile: string;
     parsedAt: string;
     detailedLogsEnabled: boolean;
-    dataSource: "complete" | "inferred_from_decks";
+    dataSource: "complete" | "inferred_from_decks" | "untapped";
     logModifiedAt: number;
   };
 }
@@ -89,6 +89,6 @@ export interface GameData {
 export interface ToolMeta {
   parsedAt: string;
   logFile: string;
-  dataSource?: "complete" | "inferred_from_decks";
+  dataSource?: "complete" | "inferred_from_decks" | "untapped";
   staleness?: string;
 }

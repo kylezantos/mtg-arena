@@ -222,7 +222,9 @@ server.registerTool(
         _meta: meta,
       };
 
-      if (gameData.meta.dataSource === "inferred_from_decks") {
+      if (gameData.meta.dataSource === "untapped") {
+        response._note = "Collection data from Untapped.gg";
+      } else if (gameData.meta.dataSource === "inferred_from_decks") {
         response._warning =
           "Collection data inferred from deck lists. Cards not in any deck are not shown. This is a partial view of your collection.";
       }
