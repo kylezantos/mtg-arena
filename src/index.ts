@@ -6,6 +6,12 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { getCardDatabase } from "./card-db.js";
 import { parseGameData } from "./log-parser.js";
+import {
+  enrichCard,
+  ensureScryfallCache,
+  refreshScryfallCache,
+} from "./scryfall.js";
+import { getDraftRatings } from "./seventeen-lands.js";
 import type { ToolMeta, GameData } from "./types.js";
 
 const VERSION = "1.0.0";
@@ -438,19 +444,27 @@ server.registerTool(
 
       return textResult({
         total: results.length,
-        cards: results.map((c) => ({
-          name: c.name,
-          grpId: c.grpId,
-          manaCost: c.manaCost,
-          colors: c.colors,
-          types: c.types,
-          subtypes: c.subtypes,
-          rarity: c.rarity,
-          power: c.power || undefined,
-          toughness: c.toughness || undefined,
-          set: c.set,
-          abilities: c.abilities || undefined,
-        })),
+        cards: results.map((c) => {
+          const cardData: Record<string, unknown> = {
+            name: c.name,
+            grpId: c.grpId,
+            manaCost: c.manaCost,
+            colors: c.colors,
+            types: c.types,
+            subtypes: c.subtypes,
+            rarity: c.rarity,
+            power: c.power || undefined,
+            toughness: c.toughness || undefined,
+            set: c.set,
+            abilities: c.abilities || undefined,
+          };
+          const scryfall = enrichCard(c.grpId);
+          if (scryfall) {
+            cardData.prices = scryfall.prices;
+            cardData.legalities = scryfall.legalities;
+          }
+          return cardData;
+        }),
       });
     } catch (err) {
       return errorResult(
@@ -500,10 +514,127 @@ server.registerTool(
         );
       }
 
-      return textResult(card);
+      // Enrich with Scryfall data if cache is available
+      const scryfall = enrichCard(card.grpId);
+      const result: Record<string, unknown> = { ...card };
+      if (scryfall) {
+        result.scryfall = scryfall;
+      }
+
+      return textResult(result);
     } catch (err) {
       return errorResult(
         `Failed to get card: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
+);
+
+// ── refresh_scryfall (R15) ──────────────────────────────────────────────
+
+server.registerTool(
+  "refresh_scryfall",
+  {
+    description:
+      "Download or refresh the Scryfall bulk data cache. Adds prices, images, and format legality to card responses. First download is ~70MB.",
+    inputSchema: {
+      force: z
+        .boolean()
+        .optional()
+        .describe("Force re-download even if cache is fresh (default false)"),
+    },
+  },
+  async ({ force }) => {
+    try {
+      if (force) {
+        const result = await refreshScryfallCache();
+        return textResult({
+          status: "downloaded",
+          cardCount: result.cardCount,
+          downloadedAt: result.downloadedAt,
+          message: `Scryfall cache refreshed with ${result.cardCount} Arena-mapped cards.`,
+        });
+      }
+
+      const result = await ensureScryfallCache();
+      if (result.status === "fresh") {
+        return textResult({
+          status: "fresh",
+          cardCount: result.cardCount,
+          age: result.age,
+          message: `Scryfall cache is up to date (${result.age} old, ${result.cardCount} cards).`,
+        });
+      }
+      if (result.status === "downloaded") {
+        return textResult({
+          status: "downloaded",
+          cardCount: result.cardCount,
+          message: `Scryfall cache downloaded with ${result.cardCount} Arena-mapped cards.`,
+        });
+      }
+      // failed
+      return errorResult(
+        result.error ??
+          "Failed to download Scryfall data. Card responses will use local data only."
+      );
+    } catch (err) {
+      return errorResult(
+        `Failed to refresh Scryfall cache: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
+);
+
+// ── get_draft_ratings (R13) ────────────────────────────────────────────
+
+server.registerTool(
+  "get_draft_ratings",
+  {
+    description:
+      "Get 17Lands draft card performance data (win rates, pick order) for a specific set. Great for evaluating draft picks.",
+    inputSchema: {
+      set: z.string().describe("Set code (e.g., 'FDN', 'DSK', 'MOM', 'OTJ')"),
+      format: z
+        .string()
+        .optional()
+        .describe(
+          "Draft format (default 'PremierDraft'). Options: PremierDraft, TradDraft, QuickDraft, Sealed"
+        ),
+      limit: z
+        .number()
+        .min(1)
+        .max(500)
+        .optional()
+        .describe("Max results to return (default 50)"),
+    },
+  },
+  async ({ set, format, limit }) => {
+    try {
+      const result = await getDraftRatings(set, format);
+      const maxResults = limit ?? 50;
+
+      if (result.ratings.length === 0) {
+        return textResult({
+          total: 0,
+          ratings: [],
+          message: `No 17Lands data found for set "${set.toUpperCase()}" (${format ?? "PremierDraft"}). The set may not have draft data yet, or the set code may be incorrect.`,
+        });
+      }
+
+      const showing = result.ratings.slice(0, maxResults);
+
+      return textResult({
+        total: result.ratings.length,
+        showing: showing.length,
+        format: format ?? "PremierDraft",
+        set: set.toUpperCase(),
+        fromCache: result.fromCache,
+        cachedAt: result.cachedAt,
+        ratings: showing,
+      });
+    } catch (err) {
+      return errorResult(
+        `Failed to get draft ratings: ${err instanceof Error ? err.message : String(err)}`
       );
     }
   }
