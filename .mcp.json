@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "mtga": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["build/index.js"],
+      "cwd": "/Users/kylezantos/App Development/mtg-arena"
+    }
+  }
+}
